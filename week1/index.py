@@ -195,6 +195,15 @@ def index_file(file, index_name, host="localhost", max_docs=2000000, batch_size=
     logger.debug(f'{docs_indexed} documents indexed in {time_indexing}')
     return docs_indexed, time_indexing
 
+def build_refresh_settings(refresh_interval):
+    refresh_settings = {
+        'settings': {
+            'index': {
+                'refresh_interval': refresh_interval
+            }
+        }
+    }
+    return refresh_settings
 
 @click.command()
 @click.option('--source_dir', '-s', help='XML files source directory')
@@ -204,7 +213,7 @@ def index_file(file, index_name, host="localhost", max_docs=2000000, batch_size=
 @click.option('--host', '-o', default="localhost", help="The name of the host running OpenSearch")
 @click.option('--max_docs', '-m', default=200000, help="The maximum number of docs to be indexed PER WORKER PER FILE.")
 @click.option('--batch_size', '-b', default=200, help="The number of docs to send per request. Max of 5000")
-@click.option('--refresh_interval', '-r', default="-1", help="The number of docs to send per request. Max of 5000")
+@click.option('--refresh_interval', '-r', default="-1", help="The refresh interval for the index that will be used during the indexing process")
 def main(source_dir: str, file_glob: str, index_name: str, workers: int, host: str, max_docs: int, batch_size: int, refresh_interval: str):
     batch_size = min(batch_size, 5000)  # I believe this is the default max batch size, but need to find docs on that
     logger.info(
@@ -213,9 +222,20 @@ def main(source_dir: str, file_glob: str, index_name: str, workers: int, host: s
     docs_indexed = 0
 
     client = get_opensearch(host)
-
+    
     #TODO: set the refresh interval
-    logger.debug(client.indices.get_settings(index=index_name))
+    
+
+    result = client.indices.get_settings(index=index_name,include_defaults=True,name="index.refresh_interval")["bbuy_products"]
+    index_dict=result["settings"]["index"]
+    initial_refresh_interval = index_dict.get("refresh_interval") or result["defaults"]["index"]["refresh_interval"]
+    logger.debug("initial value for refresh_interval settings "+ initial_refresh_interval)
+    client.indices.put_settings(index = index_name, body= build_refresh_settings(refresh_interval))
+    
+    
+    result_after = client.indices.get_settings(index=index_name,include_defaults=True,name="index.refresh_interval")
+    applied_refresh_interval=result_after["bbuy_products"]["settings"]["index"]["refresh_interval"]
+    logger.debug(" value for refresh_interval settings after application "+ applied_refresh_interval)
     start = perf_counter()
     time_indexing = 0
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
@@ -228,6 +248,7 @@ def main(source_dir: str, file_glob: str, index_name: str, workers: int, host: s
     finish = perf_counter()
     logger.info(f'Done. {docs_indexed} were indexed in {(finish - start)/60} minutes.  Total accumulated time spent in `bulk` indexing: {time_indexing/60} minutes')
     # TODO set refresh interval back to 5s
+    client.indices.put_settings(index = index_name, body= build_refresh_settings(initial_refresh_interval))
     logger.debug(client.indices.get_settings(index=index_name))
 
 if __name__ == "__main__":
